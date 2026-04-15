@@ -1,168 +1,182 @@
 /**
  * Cache Service
  * 
- * Redis-based caching layer.
+ * Redis-based caching for frequently accessed data.
  */
 
 import Redis from 'ioredis';
 import { logger } from '../utils/logger';
-import { config } from '../config';
 
-interface CacheOptions {
-  ttl?: number; // Time to live in seconds
-  tags?: string[]; // Cache tags for invalidation
+interface CacheConfig {
+  redisUrl: string;
+  defaultTTL?: number;
 }
 
-class CacheService {
-  private client: Redis | null = null;
-  private defaultTTL = 300; // 5 minutes
+/**
+ * CacheService - Redis wrapper with utility methods
+ */
+export class CacheService {
+  private client: Redis;
+  private defaultTTL: number;
 
-  constructor() {
-    this.initializeClient();
-  }
+  constructor(config: CacheConfig) {
+    this.client = new Redis(config.redisUrl);
+    this.defaultTTL = config.defaultTTL || 3600; // 1 hour default
 
-  private initializeClient(): void {
-    try {
-      this.client = new Redis(config.redisUrl, {
-        retryStrategy: (times) => {
-          const delay = Math.min(times * 50, 2000);
-          return delay;
-        },
-        maxRetriesPerRequest: 3
-      });
+    this.client.on('connect', () => {
+      logger.info('Connected to Redis');
+    });
 
-      this.client.on('connect', () => {
-        logger.info('Redis connected');
-      });
-
-      this.client.on('error', (err) => {
-        logger.error('Redis error:', err);
-      });
-    } catch (error) {
-      logger.error('Failed to initialize Redis:', error);
-      this.client = null;
-    }
+    this.client.on('error', (err) => {
+      logger.error('Redis error:', err);
+    });
   }
 
   /**
-   * Get cached value
+   * Get value from cache
    */
   async get<T>(key: string): Promise<T | null> {
-    if (!this.client) return null;
-
     try {
       const value = await this.client.get(key);
       if (!value) return null;
-      return JSON.parse(value) as T;
+      return JSON.parse(value);
     } catch (error) {
-      logger.error(`Cache get error for key ${key}:`, error);
+      logger.error('Cache get error:', error);
       return null;
     }
   }
 
   /**
-   * Set cached value
+   * Set value in cache
    */
-  async set(key: string, value: any, options: CacheOptions = {}): Promise<void> {
-    if (!this.client) return;
-
+  async set(key: string, value: any, ttl?: number): Promise<void> {
     try {
-      const ttl = options.ttl || this.defaultTTL;
       const serialized = JSON.stringify(value);
-
-      if (options.tags && options.tags.length > 0) {
-        // Use Redis transaction for tagged cache
-        const pipeline = this.client.pipeline();
-        pipeline.setex(key, ttl, serialized);
-        
-        // Add to tag sets
-        for (const tag of options.tags) {
-          pipeline.sadd(`tag:${tag}`, key);
-          pipeline.expire(`tag:${tag}`, ttl);
-        }
-
-        await pipeline.exec();
-      } else {
-        await this.client.setex(key, ttl, serialized);
-      }
+      const expiry = ttl || this.defaultTTL;
+      await this.client.setex(key, expiry, serialized);
     } catch (error) {
-      logger.error(`Cache set error for key ${key}:`, error);
+      logger.error('Cache set error:', error);
     }
   }
 
   /**
-   * Delete cached value
+   * Delete value from cache
    */
   async del(key: string): Promise<void> {
-    if (!this.client) return;
-
     try {
       await this.client.del(key);
     } catch (error) {
-      logger.error(`Cache delete error for key ${key}:`, error);
+      logger.error('Cache delete error:', error);
     }
   }
 
   /**
-   * Invalidate cache by tag
+   * Check if key exists
    */
-  async invalidateTag(tag: string): Promise<void> {
-    if (!this.client) return;
-
+  async exists(key: string): Promise<boolean> {
     try {
-      const keys = await this.client.smembers(`tag:${tag}`);
+      const result = await this.client.exists(key);
+      return result === 1;
+    } catch (error) {
+      logger.error('Cache exists error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get multiple values
+   */
+  async mget(keys: string[]): Promise<(any | null)[]> {
+    try {
+      const values = await this.client.mget(keys);
+      return values.map(v => v ? JSON.parse(v) : null);
+    } catch (error) {
+      logger.error('Cache mget error:', error);
+      return keys.map(() => null);
+    }
+  }
+
+  /**
+   * Set multiple values
+   */
+  async mset(entries: { key: string; value: any; ttl?: number }[]): Promise<void> {
+    try {
+      const pipeline = this.client.pipeline();
+      
+      for (const entry of entries) {
+        const serialized = JSON.stringify(entry.value);
+        const ttl = entry.ttl || this.defaultTTL;
+        pipeline.setex(entry.key, ttl, serialized);
+      }
+      
+      await pipeline.exec();
+    } catch (error) {
+      logger.error('Cache mset error:', error);
+    }
+  }
+
+  /**
+   * Clear cache by pattern
+   */
+  async clearPattern(pattern: string): Promise<void> {
+    try {
+      const keys = await this.client.keys(pattern);
       if (keys.length > 0) {
-        const pipeline = this.client.pipeline();
-        
-        // Delete all keys
-        pipeline.del(...keys);
-        
-        // Remove tag set
-        pipeline.del(`tag:${tag}`);
-        
-        await pipeline.exec();
-        logger.info(`Invalidated ${keys.length} keys for tag: ${tag}`);
+        await this.client.del(...keys);
+        logger.info(`Cleared ${keys.length} keys matching pattern: ${pattern}`);
       }
     } catch (error) {
-      logger.error(`Cache invalidation error for tag ${tag}:`, error);
+      logger.error('Cache clear pattern error:', error);
     }
   }
 
   /**
-   * Check if cache is available
+   * Cache wallet data
    */
-  isAvailable(): boolean {
-    return this.client !== null && this.client.status === 'ready';
+  async cacheWallet(address: string, data: any, ttl: number = 300): Promise<void> {
+    const key = `wallet:${address}`;
+    await this.set(key, data, ttl);
   }
 
   /**
-   * Get cache stats
+   * Get cached wallet
    */
-  async getStats(): Promise<any> {
-    if (!this.client) return null;
-
-    try {
-      return await this.client.info();
-    } catch (error) {
-      logger.error('Cache stats error:', error);
-      return null;
-    }
+  async getCachedWallet(address: string): Promise<any | null> {
+    const key = `wallet:${address}`;
+    return this.get(key);
   }
 
   /**
-   * Flush all cache
+   * Cache transaction trace
    */
-  async flush(): Promise<void> {
-    if (!this.client) return;
+  async cacheTrace(address: string, type: string, data: any, ttl: number = 600): Promise<void> {
+    const key = `trace:${type}:${address}`;
+    await this.set(key, data, ttl);
+  }
 
-    try {
-      await this.client.flushall();
-      logger.info('Cache flushed');
-    } catch (error) {
-      logger.error('Cache flush error:', error);
-    }
+  /**
+   * Get cached trace
+   */
+  async getCachedTrace(address: string, type: string): Promise<any | null> {
+    const key = `trace:${type}:${address}`;
+    return this.get(key);
+  }
+
+  /**
+   * Close connection
+   */
+  async close(): Promise<void> {
+    await this.client.quit();
   }
 }
 
-export const cache = new CacheService();
-export default cache;
+// Factory function
+export function createCacheService(): CacheService {
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) {
+    throw new Error('REDIS_URL environment variable is required');
+  }
+  return new CacheService({ redisUrl });
+}
+
+export default CacheService;

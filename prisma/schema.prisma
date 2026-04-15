@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,256 +7,129 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Wallet profiles and tracking
 model Wallet {
-  id                String              @id @default(uuid())
-  address           String              @unique
-  firstSeen         DateTime
-  lastSeen          DateTime
-  transactionCount  Int                 @default(0)
-  totalVolumeIn     Decimal             @default(0) @db.Decimal(20, 9)
-  totalVolumeOut    Decimal             @default(0) @db.Decimal(20, 9)
-  balance           Decimal             @default(0) @db.Decimal(20, 9)
-  riskScore         Float               @default(0)
-  labels            String[]
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-
+  id          String   @id @default(uuid())
+  address     String   @unique
+  firstSeen   DateTime @default(now())
+  lastUpdated DateTime @updatedAt
+  balance     Decimal  @default(0)
+  labels      String[]
+  riskScore   Float    @default(0)
+  
   // Relations
-  transactionsFrom  Transaction[]       @relation("FromWallet")
-  transactionsTo    Transaction[]       @relation("ToWallet")
-  exchangeInteractions ExchangeInteraction[]
-  tokenHoldings     TokenHolding[]
-  behaviorPatterns  BehaviorPattern[]
-
+  transactionsSent     Transaction[] @relation("FromWallet")
+  transactionsReceived Transaction[] @relation("ToWallet")
+  traces               Trace[]
+  
   @@index([address])
   @@index([riskScore])
-  @@map("wallets")
 }
 
-// Individual transactions
 model Transaction {
-  id              String    @id @default(uuid())
-  signature       String    @unique
-  slot            BigInt
-  blockTime       DateTime
+  id          String   @id @default(uuid())
+  signature   String   @unique
+  slot        BigInt
+  timestamp   DateTime
   
-  // Amount and token
-  amount          Decimal   @db.Decimal(20, 9)
-  tokenAddress    String?
-  tokenSymbol     String?
+  // Amount info
+  amount      Decimal
+  tokenType   String   @default("SOL") // SOL, USDC, etc.
   
   // Wallets
-  fromWalletId    String
-  toWalletId      String?
-  
-  // Metadata
-  fee             Decimal?  @db.Decimal(20, 9)
-  status          TransactionStatus @default(CONFIRMED)
+  fromAddress String
+  toAddress   String
+  fromWallet  Wallet   @relation("FromWallet", fields: [fromAddress], references: [address])
+  toWallet    Wallet   @relation("ToWallet", fields: [toAddress], references: [address])
   
   // Analysis
-  isOffRamp       Boolean   @default(false)
-  offRampConfidence Float   @default(0)
+  isOffRamp   Boolean  @default(false)
+  offRampConfidence Float @default(0)
+  exchangeId  String?
   
-  createdAt       DateTime  @default(now())
-  
-  // Relations
-  fromWallet      Wallet    @relation("FromWallet", fields: [fromWalletId], references: [id])
-  toWallet        Wallet?   @relation("ToWallet", fields: [toWalletId], references: [id])
-
   @@index([signature])
-  @@index([fromWalletId])
-  @@index([toWalletId])
-  @@index([blockTime])
+  @@index([fromAddress])
+  @@index([toAddress])
+  @@index([timestamp])
   @@index([isOffRamp])
-  @@map("transactions")
 }
 
-// Exchange interactions
-model ExchangeInteraction {
-  id                  String    @id @default(uuid())
-  walletId            String
-  exchange            String
-  depositCount        Int       @default(0)
-  withdrawalCount     Int       @default(0)
-  totalDepositVolume  Decimal   @default(0) @db.Decimal(20, 9)
-  totalWithdrawalVolume Decimal @default(0) @db.Decimal(20, 9)
-  lastInteraction     DateTime
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-
-  wallet              Wallet    @relation(fields: [walletId], references: [id])
-
-  @@unique([walletId, exchange])
-  @@index([walletId])
-  @@map("exchange_interactions")
-}
-
-// Token holdings
-model TokenHolding {
-  id            String    @id @default(uuid())
-  walletId      String
-  tokenAddress  String
-  tokenSymbol   String
-  balance       Decimal   @db.Decimal(20, 9)
-  valueUsd      Decimal?  @db.Decimal(20, 2)
-  firstAcquired DateTime
-  lastUpdated   DateTime  @updatedAt
-
-  wallet        Wallet    @relation(fields: [walletId], references: [id])
-
-  @@unique([walletId, tokenAddress])
-  @@index([walletId])
-  @@map("token_holdings")
-}
-
-// Behavior patterns
-model BehaviorPattern {
-  id          String    @id @default(uuid())
+model Trace {
+  id          String   @id @default(uuid())
   walletId    String
-  type        String
-  frequency   Int       @default(1)
-  description String
-  firstSeen   DateTime  @default(now())
-  lastSeen    DateTime  @updatedAt
-
-  wallet      Wallet    @relation(fields: [walletId], references: [id])
-
-  @@unique([walletId, type])
+  wallet      Wallet   @relation(fields: [walletId], references: [id])
+  
+  traceType   String   // "backward" or "forward"
+  maxDepth    Int
+  
+  // Results
+  originWallet    String?
+  destinationWallet String?
+  pathLength      Int?
+  totalAmount     Decimal?
+  
+  // JSON data
+  hops        Json?
+  
+  createdAt   DateTime @default(now())
+  
   @@index([walletId])
-  @@map("behavior_patterns")
+  @@index([createdAt])
 }
 
-// Wallet clusters (bundles)
-model WalletCluster {
-  id              String    @id @default(uuid())
-  clusterId       String    @unique
-  confidence      Float
-  totalVolume     Decimal   @db.Decimal(20, 9)
-  firstPurchase   DateTime
-  lastPurchase    DateTime
-  indicators      Json      // Array of ClusterIndicator
-  createdAt       DateTime  @default(now())
-
-  members         ClusterMember[]
-
-  @@index([confidence])
-  @@map("wallet_clusters")
-}
-
-// Cluster membership
-model ClusterMember {
-  id          String        @id @default(uuid())
-  clusterId   String
-  walletAddress String
-  joinedAt    DateTime      @default(now())
-
-  cluster     WalletCluster @relation(fields: [clusterId], references: [id])
-
-  @@unique([clusterId, walletAddress])
-  @@map("cluster_members")
-}
-
-// Known exchange addresses
-model KnownExchange {
-  id          String    @id @default(uuid())
-  address     String    @unique
-  exchange    String
-  type        ExchangeType
-  network     String
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
+model ExchangeWallet {
+  id          String   @id @default(uuid())
+  address     String   @unique
+  exchange    String   // Binance, Coinbase, etc.
+  walletType  String   // "hot", "cold", "deposit", "withdrawal"
+  
+  firstSeen   DateTime @default(now())
+  lastVerified DateTime?
+  
   @@index([address])
   @@index([exchange])
-  @@map("known_exchanges")
 }
 
-// Known off-ramp addresses
-model KnownOffRamp {
-  id          String    @id @default(uuid())
-  address     String    @unique
-  name        String
-  type        OffRampType
-  country     String?
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  @@index([address])
-  @@map("known_offramps")
+model Bundle {
+  id          String   @id @default(uuid())
+  tokenAddress String
+  
+  wallets     String[] // Array of wallet addresses
+  confidence  Float
+  totalVolume Decimal
+  
+  firstPurchase DateTime
+  detectedAt    DateTime @default(now())
+  
+  @@index([tokenAddress])
+  @@index([detectedAt])
 }
 
-// API call logs for monitoring
-model ApiCallLog {
-  id          String    @id @default(uuid())
-  apiName     String
+model ApiCall {
+  id          String   @id @default(uuid())
+  apiName     String   // "solana-rpc", "binance-api", etc.
   endpoint    String
   statusCode  Int
-  retryCount  Int       @default(0)
-  duration    Int       // milliseconds
-  error       String?
-  timestamp   DateTime  @default(now())
-
+  duration    Int      // milliseconds
+  retryCount  Int      @default(0)
+  timestamp   DateTime @default(now())
+  
   @@index([apiName])
   @@index([timestamp])
   @@index([statusCode])
-  @@map("api_call_logs")
 }
 
-// Trace jobs for tracking analysis requests
-model TraceJob {
-  id              String        @id @default(uuid())
-  jobType         TraceJobType
-  status          JobStatus     @default(PENDING)
-  targetWallet    String
-  maxDepth        Int           @default(10)
-  result          Json?
-  error           String?
-  startedAt       DateTime?
-  completedAt     DateTime?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  @@index([targetWallet])
-  @@index([status])
-  @@index([jobType])
-  @@map("trace_jobs")
-}
-
-// Enums
-enum TransactionStatus {
-  PENDING
-  CONFIRMED
-  FAILED
-}
-
-enum ExchangeType {
-  HOT_WALLET
-  COLD_WALLET
-  DEPOSIT_ADDRESS
-  WITHDRAWAL_ADDRESS
-}
-
-enum OffRampType {
-  EXCHANGE_WITHDRAWAL
-  PAYMENT_PROCESSOR
-  OTC_DESK
-  ATM
-  OTHER
-}
-
-enum TraceJobType {
-  ORIGIN_TRACE
-  FORWARD_TRACE
-  BUNDLE_DETECTION
-  WALLET_PROFILE
-}
-
-enum JobStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  password    String   // hashed
+  apiKey      String   @unique
+  
+  tier        String   @default("free") // free, pro, enterprise
+  rateLimit   Int      @default(100)   // requests per minute
+  
+  createdAt   DateTime @default(now())
+  lastLogin   DateTime?
+  
+  @@index([apiKey])
+  @@index([email])
 }

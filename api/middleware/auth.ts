@@ -1,89 +1,82 @@
 /**
- * Authentication Middleware
+ * JWT Authentication Middleware
  * 
- * JWT token validation for protected routes.
+ * Validates JWT tokens for protected routes.
  */
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { config } from '../../core/config';
-import { createError } from './error-handler';
+import { logger } from '../../core/utils/logger';
 
-interface JwtPayload {
-  userId: string;
-  role: string;
-}
-
-declare global {
-  namespace Express {
-    interface Request {
-      user?: JwtPayload;
-    }
-  }
+interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    tier: string;
+  };
 }
 
 /**
- * Verify JWT token
+ * Verify JWT token from Authorization header
  */
-export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader) {
+    res.status(401).json({ error: 'Authorization header required' });
+    return;
+  }
+
+  const parts = authHeader.split(' ');
+  if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    res.status(401).json({ error: 'Invalid authorization format. Use: Bearer <token>' });
+    return;
+  }
+
+  const token = parts[1];
+  const secret = process.env.JWT_SECRET;
+
+  if (!secret) {
+    logger.error('JWT_SECRET not configured');
+    res.status(500).json({ error: 'Server configuration error' });
+    return;
+  }
+
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw createError('No token provided', 401, 'UNAUTHORIZED');
-    }
-
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, config.jwtSecret) as JwtPayload;
-
-    req.user = decoded;
+    const decoded = jwt.verify(token, secret) as any;
+    req.user = {
+      id: decoded.id,
+      email: decoded.email,
+      tier: decoded.tier
+    };
     next();
   } catch (error) {
-    if (error instanceof Error && error.name === 'JsonWebTokenError') {
-      next(createError('Invalid token', 401, 'UNAUTHORIZED'));
-    } else if (error instanceof Error && error.name === 'TokenExpiredError') {
-      next(createError('Token expired', 401, 'TOKEN_EXPIRED'));
-    } else {
-      next(error);
-    }
+    logger.warn('Invalid JWT token:', error);
+    res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
 
 /**
- * Optional auth - sets user if token exists but doesn't require it
+ * Require specific tier access
  */
-export function optionalAuth(req: Request, res: Response, next: NextFunction): void {
-  try {
-    const authHeader = req.headers.authorization;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      const decoded = jwt.verify(token, config.jwtSecret) as JwtPayload;
-      req.user = decoded;
-    }
-
-    next();
-  } catch {
-    // Ignore errors for optional auth
-    next();
-  }
-}
-
-/**
- * Role-based access control
- */
-export function requireRole(...allowedRoles: string[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+export function requireTier(tiers: string[]) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     if (!req.user) {
-      next(createError('Authentication required', 401, 'UNAUTHORIZED'));
+      res.status(401).json({ error: 'Authentication required' });
       return;
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
-      next(createError('Insufficient permissions', 403, 'FORBIDDEN'));
+    if (!tiers.includes(req.user.tier)) {
+      res.status(403).json({ 
+        error: 'Insufficient tier',
+        required: tiers,
+        current: req.user.tier
+      });
       return;
     }
 
     next();
   };
 }
+
+export default authMiddleware;

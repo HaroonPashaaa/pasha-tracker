@@ -1,182 +1,220 @@
 /**
  * Metrics Service
- * 
- * Prometheus metrics collection and reporting.
+ *
+ * Tracks application metrics for monitoring and alerting.
  */
 
-import { Counter, Histogram, Gauge, Registry } from 'prom-client';
 import { logger } from '../utils/logger';
 
-class MetricsService {
-  private register: Registry;
-  
-  // API metrics
-  private httpRequestsTotal: Counter;
-  private httpRequestDuration: Histogram;
-  private httpRequestErrors: Counter;
-  
-  // Blockchain metrics
-  private solanaRpcCalls: Counter;
-  private solanaRpcErrors: Counter;
-  private solanaRpcDuration: Histogram;
-  
-  // Tracing metrics
-  private tracesCompleted: Counter;
-  private tracesFailed: Counter;
-  private traceDepth: Histogram;
-  
-  // System metrics
-  private activeConnections: Gauge;
-  private queueSize: Gauge;
+interface MetricValue {
+  timestamp: number;
+  value: number;
+  labels?: Record<string, string>;
+}
+
+interface MetricDefinition {
+  name: string;
+  help: string;
+  type: 'counter' | 'gauge' | 'histogram';
+}
+
+/**
+ * MetricsService - Collects and exports metrics
+ */
+export class MetricsService {
+  private metrics: Map<string, MetricDefinition>;
+  private values: Map<string, MetricValue[]>;
+  private readonly maxDataPoints = 10000;
 
   constructor() {
-    this.register = new Registry();
-    
-    this.initializeMetrics();
+    this.metrics = new Map();
+    this.values = new Map();
+    this.initializeDefaultMetrics();
   }
 
-  private initializeMetrics(): void {
-    // HTTP requests
-    this.httpRequestsTotal = new Counter({
-      name: 'http_requests_total',
-      help: 'Total HTTP requests',
-      labelNames: ['method', 'route', 'status_code'],
-      registers: [this.register]
+  /**
+   * Initialize default application metrics
+   */
+  private initializeDefaultMetrics(): void {
+    this.registerMetric({
+      name: 'api_requests_total',
+      help: 'Total number of API requests',
+      type: 'counter'
     });
 
-    this.httpRequestDuration = new Histogram({
-      name: 'http_request_duration_seconds',
-      help: 'HTTP request duration in seconds',
-      labelNames: ['method', 'route'],
-      buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5],
-      registers: [this.register]
+    this.registerMetric({
+      name: 'api_request_duration_ms',
+      help: 'API request duration in milliseconds',
+      type: 'histogram'
     });
 
-    this.httpRequestErrors = new Counter({
-      name: 'http_request_errors_total',
-      help: 'Total HTTP request errors',
-      labelNames: ['method', 'route', 'error_type'],
-      registers: [this.register]
-    });
-
-    // Solana RPC metrics
-    this.solanaRpcCalls = new Counter({
+    this.registerMetric({
       name: 'solana_rpc_calls_total',
       help: 'Total Solana RPC calls',
-      labelNames: ['method'],
-      registers: [this.register]
+      type: 'counter'
     });
 
-    this.solanaRpcErrors = new Counter({
-      name: 'solana_rpc_errors_total',
-      help: 'Total Solana RPC errors',
-      labelNames: ['method', 'error_type'],
-      registers: [this.register]
+    this.registerMetric({
+      name: 'active_traces',
+      help: 'Number of active traces',
+      type: 'gauge'
     });
 
-    this.solanaRpcDuration = new Histogram({
-      name: 'solana_rpc_duration_seconds',
-      help: 'Solana RPC call duration',
-      labelNames: ['method'],
-      buckets: [0.1, 0.5, 1, 2, 5, 10],
-      registers: [this.register]
-    });
-
-    // Tracing metrics
-    this.tracesCompleted = new Counter({
-      name: 'traces_completed_total',
-      help: 'Total completed traces',
-      labelNames: ['trace_type'],
-      registers: [this.register]
-    });
-
-    this.tracesFailed = new Counter({
-      name: 'traces_failed_total',
-      help: 'Total failed traces',
-      labelNames: ['trace_type', 'error_type'],
-      registers: [this.register]
-    });
-
-    this.traceDepth = new Histogram({
-      name: 'trace_depth',
-      help: 'Depth of traces',
-      buckets: [1, 2, 3, 5, 10, 15, 20],
-      registers: [this.register]
-    });
-
-    // System metrics
-    this.activeConnections = new Gauge({
-      name: 'active_connections',
-      help: 'Number of active connections',
-      registers: [this.register]
-    });
-
-    this.queueSize = new Gauge({
-      name: 'queue_size',
-      help: 'Current queue size',
-      labelNames: ['queue_name'],
-      registers: [this.register]
+    this.registerMetric({
+      name: 'cache_hit_ratio',
+      help: 'Cache hit ratio',
+      type: 'gauge'
     });
   }
 
-  // HTTP metrics
-  recordHttpRequest(method: string, route: string, statusCode: number): void {
-    this.httpRequestsTotal.inc({ method, route, status_code: statusCode.toString() });
+  /**
+   * Register a new metric
+   */
+  registerMetric(definition: MetricDefinition): void {
+    this.metrics.set(definition.name, definition);
+    if (!this.values.has(definition.name)) {
+      this.values.set(definition.name, []);
+    }
   }
 
-  recordHttpDuration(method: string, route: string, duration: number): void {
-    this.httpRequestDuration.observe({ method, route }, duration);
+  /**
+   * Increment counter metric
+   */
+  increment(name: string, labels?: Record<string, string>, value: number = 1): void {
+    const metric = this.metrics.get(name);
+    if (!metric || metric.type !== 'counter') {
+      logger.warn(`Counter metric ${name} not found`);
+      return;
+    }
+
+    const values = this.values.get(name) || [];
+    values.push({
+      timestamp: Date.now(),
+      value,
+      labels
+    });
+
+    this.trimOldData(values);
+    this.values.set(name, values);
   }
 
-  recordHttpError(method: string, route: string, errorType: string): void {
-    this.httpRequestErrors.inc({ method, route, error_type: errorType });
+  /**
+   * Set gauge value
+   */
+  setGauge(name: string, value: number, labels?: Record<string, string>): void {
+    const metric = this.metrics.get(name);
+    if (!metric || metric.type !== 'gauge') {
+      logger.warn(`Gauge metric ${name} not found`);
+      return;
+    }
+
+    const values = this.values.get(name) || [];
+    values.push({
+      timestamp: Date.now(),
+      value,
+      labels
+    });
+
+    this.trimOldData(values);
+    this.values.set(name, values);
   }
 
-  // Solana RPC metrics
-  recordSolanaRpcCall(method: string): void {
-    this.solanaRpcCalls.inc({ method });
+  /**
+   * Record histogram value
+   */
+  recordHistogram(name: string, value: number, labels?: Record<string, string>): void {
+    const metric = this.metrics.get(name);
+    if (!metric || metric.type !== 'histogram') {
+      logger.warn(`Histogram metric ${name} not found`);
+      return;
+    }
+
+    const values = this.values.get(name) || [];
+    values.push({
+      timestamp: Date.now(),
+      value,
+      labels
+    });
+
+    this.trimOldData(values);
+    this.values.set(name, values);
   }
 
-  recordSolanaRpcError(method: string, errorType: string): void {
-    this.solanaRpcErrors.inc({ method, error_type: errorType });
+  /**
+   * Trim old data points
+   */
+  private trimOldData(values: MetricValue[]): void {
+    if (values.length > this.maxDataPoints) {
+      values.splice(0, values.length - this.maxDataPoints);
+    }
   }
 
-  recordSolanaRpcDuration(method: string, duration: number): void {
-    this.solanaRpcDuration.observe({ method }, duration);
+  /**
+   * Get metric values
+   */
+  getValues(name: string): MetricValue[] {
+    return this.values.get(name) || [];
   }
 
-  // Tracing metrics
-  recordTraceCompleted(traceType: string): void {
-    this.tracesCompleted.inc({ trace_type: traceType });
+  /**
+   * Get all metrics in Prometheus format
+   */
+  getPrometheusMetrics(): string {
+    let output = '';
+
+    for (const [name, definition] of this.metrics) {
+      output += `# HELP ${name} ${definition.help}\n`;
+      output += `# TYPE ${name} ${definition.type}\n`;
+
+      const values = this.values.get(name) || [];
+      const latest = values[values.length - 1];
+
+      if (latest) {
+        const labelStr = latest.labels
+          ? Object.entries(latest.labels)
+              .map(([k, v]) => `${k}="${v}"`)
+              .join(',')
+          : '';
+
+        if (labelStr) {
+          output += `${name}{${labelStr}} ${latest.value}\n`;
+        } else {
+          output += `${name} ${latest.value}\n`;
+        }
+      }
+    }
+
+    return output;
   }
 
-  recordTraceFailed(traceType: string, errorType: string): void {
-    this.tracesFailed.inc({ trace_type: traceType, error_type: errorType });
-  }
+  /**
+   * Get summary stats for metric
+   */
+  getStats(name: string): {
+    count: number;
+    sum: number;
+    avg: number;
+    min: number;
+    max: number;
+  } | null {
+    const values = this.values.get(name);
+    if (!values || values.length === 0) {
+      return null;
+    }
 
-  recordTraceDepth(depth: number): void {
-    this.traceDepth.observe(depth);
-  }
+    const nums = values.map(v => v.value);
+    const sum = nums.reduce((a, b) => a + b, 0);
 
-  // System metrics
-  setActiveConnections(count: number): void {
-    this.activeConnections.set(count);
-  }
-
-  setQueueSize(queueName: string, size: number): void {
-    this.queueSize.set({ queue_name: queueName }, size);
-  }
-
-  // Get metrics for scraping
-  async getMetrics(): Promise<string> {
-    return this.register.metrics();
-  }
-
-  // Get register for custom metrics
-  getRegister(): Registry {
-    return this.register;
+    return {
+      count: nums.length,
+      sum,
+      avg: sum / nums.length,
+      min: Math.min(...nums),
+      max: Math.max(...nums)
+    };
   }
 }
 
+// Global instance
 export const metrics = new MetricsService();
-export default metrics;
+export default MetricsService;
