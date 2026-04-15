@@ -1,30 +1,50 @@
 # Deployment Guide
 
-This guide covers deploying Pasha Tracker to production.
+> Deploying Pasha Tracker to production
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Docker Deployment](#docker-deployment)
+3. [Manual Deployment](#manual-deployment)
+4. [Cloud Deployment](#cloud-deployment)
+5. [Monitoring](#monitoring)
 
 ## Prerequisites
 
-- Docker and Docker Compose installed
-- PostgreSQL 15+ database
-- Redis 7+ cache
+- Node.js 18+
+- PostgreSQL 14+
+- Redis 7+
 - Solana RPC endpoint (Helius recommended)
 
-## Quick Start with Docker
+## Docker Deployment
+
+### Quick Start
 
 ```bash
 # Clone repository
 git clone https://github.com/HaroonPashaaa/pasha-tracker.git
 cd pasha-tracker
 
-# Copy environment file
+# Create environment file
 cp .env.example .env
+# Edit .env with your credentials
 
-# Edit .env with your settings
-nano .env
-
-# Start with Docker Compose
+# Start services
 docker-compose up -d
+
+# Run migrations
+docker-compose exec app npx prisma migrate deploy
+
+# Seed database
+docker-compose exec app npm run seed
 ```
+
+### Services
+
+- **app**: Main API server (port 3000)
+- **db**: PostgreSQL database (port 5432)
+- **redis**: Redis cache (port 6379)
 
 ## Manual Deployment
 
@@ -37,117 +57,139 @@ npm install
 ### 2. Setup Database
 
 ```bash
-# Run migrations
-npx prisma migrate dev
+# Create database
+createdb pasha_tracker
 
-# Generate Prisma client
+# Run migrations
+npx prisma migrate deploy
+
+# Generate client
 npx prisma generate
 ```
 
-### 3. Build Application
+### 3. Setup Redis
+
+```bash
+# Install Redis
+# Ubuntu/Debian:
+sudo apt-get install redis-server
+
+# macOS:
+brew install redis
+brew services start redis
+```
+
+### 4. Configure Environment
+
+```bash
+cp .env.example .env
+# Edit .env with your values
+```
+
+### 5. Build and Start
 
 ```bash
 npm run build
-```
-
-### 4. Start Server
-
-```bash
 npm start
 ```
 
-## Environment Variables
+## Cloud Deployment
 
-See `.env.example` for all required variables.
+### Railway
 
-### Required
+```bash
+# Install Railway CLI
+npm install -g @railway/cli
 
-- `SOLANA_RPC_URL` - Solana RPC endpoint
-- `DATABASE_URL` - PostgreSQL connection string
-- `REDIS_URL` - Redis connection string
-- `JWT_SECRET` - Secret for JWT signing
+# Login and deploy
+railway login
+railway init
+railway up
+```
 
-### Optional
+### Render
 
-- `PORT` - Server port (default: 3000)
-- `LOG_LEVEL` - Logging level (default: info)
-- `METRICS_ENABLED` - Enable Prometheus metrics
+1. Connect GitHub repository
+2. Add environment variables
+3. Deploy
 
-## Production Checklist
+### AWS ECS
 
-- [ ] Change default JWT secret
-- [ ] Enable SSL/TLS
-- [ ] Set up reverse proxy (nginx)
-- [ ] Configure firewall rules
-- [ ] Enable database backups
-- [ ] Set up log rotation
-- [ ] Configure monitoring alerts
-- [ ] Test failover procedures
+```bash
+# Build image
+docker build -t pasha-tracker .
+
+# Push to ECR
+aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_URL
+docker tag pasha-tracker:latest $ECR_URL/pasha-tracker:latest
+docker push $ECR_URL/pasha-tracker:latest
+
+# Deploy to ECS
+aws ecs update-service --cluster pasha-tracker --service api --force-new-deployment
+```
 
 ## Monitoring
 
 ### Health Checks
 
-```bash
-curl http://localhost:3000/health
+- `GET /health` - Service health
+- `GET /stats` - Rate limiting stats
+- `GET /metrics` - Prometheus metrics
+
+### Logging
+
+Logs are written to:
+- Console (development)
+- `logs/combined.log` (all levels)
+- `logs/error.log` (errors only)
+
+### Alerts
+
+Set up alerts for:
+- High error rates
+- Rate limit exhaustion
+- Database connection failures
+- RPC endpoint failures
+
+## SSL/TLS
+
+### With Nginx
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.pasha-tracker.io;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
 ```
 
-### Metrics
+## Backup
 
-Prometheus metrics available at:
-```
-http://localhost:9090/metrics
-```
-
-### Logs
-
-View logs:
-```bash
-docker-compose logs -f app
-```
-
-## Scaling
-
-### Horizontal Scaling
-
-Run multiple instances behind a load balancer:
-
-```yaml
-# docker-compose.yml
-services:
-  app:
-    deploy:
-      replicas: 3
-```
-
-### Database Scaling
-
-- Use read replicas for analytics queries
-- Consider connection pooling (PgBouncer)
-- Monitor query performance
-
-## Troubleshooting
-
-### Database Connection Issues
-
-```bash
-# Test database connection
-npx prisma db pull
-```
-
-### Redis Connection Issues
+### Database
 
 ```bash
-# Test Redis
-redis-cli ping
+# Backup
+pg_dump pasha_tracker > backup.sql
+
+# Restore
+psql pasha_tracker < backup.sql
 ```
 
-### High Memory Usage
+### Redis
 
-- Check cache TTL settings
-- Monitor for memory leaks
-- Adjust Node.js heap size
-
-## Support
-
-For deployment issues, open an issue on GitHub.
+```bash
+# Backup
+redis-cli SAVE
+cp /var/lib/redis/dump.rdb backup.rdb
+```

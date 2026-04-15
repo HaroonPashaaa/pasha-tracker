@@ -4,52 +4,59 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
+| 1.x     | :white_check_mark: |
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability, please DO NOT open an issue. 
-Email security concerns to: security@pashatracker.io
+If you discover a security vulnerability, please:
 
-We will respond within 48 hours and work to resolve the issue promptly.
+1. **DO NOT** open a public issue
+2. Email security@pasha-tracker.io
+3. Allow 48 hours for initial response
+4. Allow 90 days for fix before public disclosure
 
 ## Security Measures
 
-### API Keys and Secrets
+### API Security
 
-- Never commit API keys to the repository
-- Use `.env` files for local development (already in `.gitignore`)
-- Rotate API keys regularly
-- Use environment variables in production
-
-### Rate Limiting
-
-All external API calls are rate-limited to prevent:
-- API abuse
-- IP bans from service providers
-- Excessive costs
-
-### Authentication
-
-- JWT tokens required for protected endpoints
-- Tokens expire after 24 hours
-- Role-based access control implemented
+- JWT authentication required for all endpoints
+- Rate limiting per IP and per user
+- Input validation on all parameters
+- SQL injection protection via Prisma ORM
 
 ### Data Protection
 
-- Wallet addresses are public information but stored securely
-- No private keys are ever stored or requested
-- Database connections use SSL/TLS
+- API keys stored encrypted
+- No private keys stored
+- Database connections use SSL
+- Redis connections use authentication
 
-### Dependencies
+### Blockchain Security
 
-- Regular security audits with `npm audit`
-- Automated vulnerability scanning in CI/CD
-- Dependabot alerts enabled
+- Read-only operations (no transactions)
+- Rate limited RPC calls
+- No exposure of sensitive wallet data
+- Public blockchain data only
 
-## Best Practices for Users
+## Best Practices
 
-1. **Keep your API keys secure** - Never share them or commit them
-2. **Use strong JWT secrets** - Minimum 32 characters in production
-3. **Monitor your API usage** - Check rate limit headers
-4. **Report suspicious activity** - Contact us if you notice anything unusual
+### For Users
+
+1. Use strong JWT secrets
+2. Rotate API keys regularly
+3. Monitor rate limit usage
+4. Report suspicious activity
+
+### For Developers
+
+1. Never commit .env files
+2. Use parameterized queries
+3. Validate all inputs
+4. Keep dependencies updated
+
+## Known Limitations
+
+- Free tier APIs have rate limits
+- Blockchain data is public
+- No guarantee of complete trace coverage
+- Exchange wallet databases may be incomplete
