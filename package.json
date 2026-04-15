@@ -7,13 +7,29 @@
     "build": "tsc",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "start": "node dist/index.js",
+    "start:prod": "NODE_ENV=production node dist/index.js",
     "test": "jest",
     "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --coverage --reporters=default --reporters=jest-junit",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\"",
     "db:migrate": "prisma migrate dev",
+    "db:migrate:prod": "prisma migrate deploy",
     "db:generate": "prisma generate",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:seed": "ts-node prisma/seed.ts",
+    "db:reset": "prisma migrate reset",
+    "docker:build": "docker build -t pasha-tracker .",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f app",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist coverage",
+    "prebuild": "npm run clean",
+    "postinstall": "prisma generate"
   },
   "keywords": [
     "solana",
@@ -21,10 +37,21 @@
     "forensics",
     "tracing",
     "analytics",
-    "cryptocurrency"
+    "cryptocurrency",
+    "defi",
+    "security",
+    "compliance"
   ],
   "author": "Pasha",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HaroonPashaaa/pasha-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HaroonPashaaa/pasha-tracker/issues"
+  },
+  "homepage": "https://github.com/HaroonPashaaa/pasha-tracker#readme",
   "dependencies": {
     "@solana/web3.js": "^1.91.0",
     "@prisma/client": "^5.11.0",
@@ -41,7 +68,9 @@
     "helmet": "^7.1.0",
     "express-rate-limit": "^7.2.0",
     "node-cron": "^3.0.3",
-    "bottleneck": "^2.19.5"
+    "bottleneck": "^2.19.5",
+    "prom-client": "^15.1.0",
+    "ioredis": "^5.3.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
@@ -51,6 +80,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/node-cron": "^3.0.11",
+    "@types/ioredis": "^5.0.0",
     "typescript": "^5.3.3",
     "ts-node-dev": "^2.0.0",
     "jest": "^29.7.0",
@@ -59,9 +89,12 @@
     "eslint": "^8.57.0",
     "@typescript-eslint/eslint-plugin": "^7.1.0",
     "@typescript-eslint/parser": "^7.1.0",
-    "prisma": "^5.11.0"
+    "prisma": "^5.11.0",
+    "prettier": "^3.2.5",
+    "jest-junit": "^16.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   }
 }
